@@ -5,9 +5,11 @@
  */
 
 #include "news-aggregator.h"
+#include <algorithm>
 #include <getopt.h>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <libxml/catalog.h>
 #include <libxml/parser.h>
 #include <unordered_set>
@@ -161,6 +163,40 @@ NewsAggregator::NewsAggregator(const string &rssFeedListURI, bool verbose)
  */
 
 void NewsAggregator::processAllFeeds() {
+  auto articles = feedList2Articles(rssFeedListURI);
+  map<pair<title, server>, map<Article, vector<string>>> tokenMap;
+  for (auto &article : articles) {
+    log.noteSingleArticleDownloadBeginning(article);
+    auto htmlDoc = HTMLDocument(article.url);
+    try {
+      htmlDoc.parse();
+    } catch (HTMLDocumentException ex) {
+      cerr << ex.what();
+      log.noteSingleArticleDownloadFailure(article);
+    }
+    tokenMap[make_pair(article.title, getURLServer(article.url))][article] =
+        htmlDoc.getTokens();
+  }
+  for (auto &[key, value] : tokenMap) {
+    auto it = value.begin();
+    auto &art = it->first;
+    auto &words = it->second;
+    sort(words.begin(), words.end());
+    it++;
+    for (; it != value.end(); ++it) {
+      vector<string> tmp;
+      auto &vec = it->second;
+      sort(vec.begin(), vec.end());
+      set_intersection(words.cbegin(), words.cend(), tmp.cbegin(), tmp.cend(),
+                       back_inserter(tmp));
+      words = tmp;
+    }
+    index.add(art, words);
+  }
+}
+
+set<Article> NewsAggregator::feedList2Articles(const string &rssFeedListUri) {
+  set<Article> articles;
   RSSFeedList rssFeedList(rssFeedListURI);
   try {
     rssFeedList.parse();
@@ -168,22 +204,24 @@ void NewsAggregator::processAllFeeds() {
     log.noteFullRSSFeedListDownloadFailureAndExit(rssFeedListURI);
   }
   log.noteFullRSSFeedListDownloadEnd();
-  unordered_set<url> urlSet;
-  for (auto &item : rssFeedList.getFeeds()) {
-    urlSet.insert(item.first);
-  }
+  set<url> urlSet;
+  auto &feeds = rssFeedList.getFeeds();
+  transform(feeds.begin(), feeds.end(), inserter(urlSet, urlSet.end()),
+            [](auto item) { return item.first; });
   // from rss feed list to rss feed
   for (auto &uri : urlSet) {
     log.noteSingleFeedDownloadBeginning(uri);
     RSSFeed rssFeed(uri);
     try {
       rssFeed.parse();
-      for (auto &item : rssFeed.getArticles()) {
-        cout << "Articles: " << item.url << endl;
-      }
+      auto &downArticles = rssFeed.getArticles();
+      copy(downArticles.begin(), downArticles.end(),
+           inserter(articles, articles.end()));
     } catch (RSSFeedException ex) {
+      cerr << ex.what() << endl;
       log.noteSingleFeedDownloadFailure(uri);
     }
     log.noteSingleFeedDownloadEnd(uri);
   }
+  return std::move(articles);
 }

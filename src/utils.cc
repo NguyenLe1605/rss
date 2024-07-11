@@ -24,7 +24,11 @@ tuple<string, string> splitUrl(const string &url) {
   size_t end = url.find('/', start);
   if (end == string::npos)
     end = url.size();
-  return make_tuple(url.substr(0, end), url.substr(end));
+  auto remains = url.substr(end);
+  if (remains == "/") {
+    remains = "";
+  }
+  return make_tuple(url.substr(0, end), remains);
 }
 
 string getURLServer(const string &url) {
