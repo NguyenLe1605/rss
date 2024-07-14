@@ -11,6 +11,7 @@
 #include <sstream>
 #include <vector>
 
+#include <cpr/cpr.h>
 #include <libxml/HTMLparser.h>
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
@@ -18,7 +19,7 @@
 
 #include "html-document-exception.h"
 #include "html-document.h"
-#include "httplib.h"
+// #include "httplib.h"
 #include "stream-tokenizer.h"
 #include "utils.h"
 
@@ -29,11 +30,12 @@ static const int kHTMLParseFlags = HTML_PARSE_NOBLANKS | HTML_PARSE_NOERROR |
 static const string kDelimiters = " \t\n\r\b!@#$%^&*()_-+=~`{[}]|\\\"':;<,>.?/";
 
 void HTMLDocument::parse() noexcept(false) {
-  const auto &[host, path] = splitUrl(url);
-  httplib::Client cli(host);
-  cout << host << " " << path << endl;
-  auto res = cli.Get(path);
-  if (res == nullptr) {
+  // const auto &[host, path] = splitUrl(url);
+  // httplib::Client cli(host);
+  // cout << host << " " << path << endl;
+  // auto res = cli.Get(path);
+  cpr::Response res = cpr::Get(cpr::Url{url});
+  if (res.status_code != 200) {
     // This is the only real user error we handle with any frequency, as it's
     // completely reasonable that the client more than occasionally specify a
     // bogus URL.
@@ -41,7 +43,7 @@ void HTMLDocument::parse() noexcept(false) {
     oss << "Error: unable to download the RSS feed at \"" << url << "\".";
     throw HTMLDocumentException(oss.str());
   }
-  htmlDocPtr doc = htmlReadMemory(res->body.c_str(), res->body.length(), NULL,
+  htmlDocPtr doc = htmlReadMemory(res.text.c_str(), res.text.length(), NULL,
                                   /* encoding = */ NULL, kHTMLParseFlags);
   if (doc == NULL) {
     // This is the only real user error we handle with any frequency, as it's

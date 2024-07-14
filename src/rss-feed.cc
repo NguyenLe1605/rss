@@ -11,15 +11,16 @@
 #include <sstream>
 #include <vector>
 
+#include <cpr/cpr.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
 
-#include "httplib.h"
+// #include "httplib.h"
 #include "rss-feed-exception.h"
 #include "string-utils.h"
-#include "utils.h"
+// #include "utils.h"
 
 using namespace std;
 
@@ -27,20 +28,23 @@ static const int XML_PARSE_FLAGS =
     XML_PARSE_NOBLANKS | XML_PARSE_NOERROR | XML_PARSE_NOWARNING;
 
 void RSSFeed::parse() noexcept(false) {
-  const auto &[host, path] = splitUrl(url);
-  httplib::Client cli(host);
-  auto res = cli.Get(path);
-  if (res == nullptr) {
+  xmlDocPtr doc = NULL;
+  cpr::Response res = cpr::Get(cpr::Url{url});
+  if (res.status_code != 200) {
     // This is the only real user error we handle with any frequency, as it's
     // completely reasonable that the client more than occasionally specify a
     // bogus URL.
-    basic_ostringstream<char> oss;
-    oss << "Error: unable to download the RSS feed at \"" << url << "\".";
-    throw RSSFeedException(oss.str());
+    doc = xmlReadFile(url.c_str(), NULL, XML_PARSE_FLAGS);
+    if (doc == NULL) {
+      basic_ostringstream<char> oss;
+      oss << "Error: unable to download the RSS feed at \"" << url << "\".";
+      throw RSSFeedException(oss.str());
+    }
+  } else {
+    doc = xmlReadMemory(res.text.c_str(), res.text.length(), NULL,
+                        /* encoding = */ NULL, XML_PARSE_FLAGS);
   }
 
-  xmlDocPtr doc = xmlReadMemory(res->body.c_str(), res->body.length(), NULL,
-                                /* encoding = */ NULL, XML_PARSE_FLAGS);
   if (doc == NULL) {
     // This is the only real user error we handle with any frequency, as it's
     // completely reasonable that the client more than occasionally specify a

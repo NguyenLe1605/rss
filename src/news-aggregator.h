@@ -63,6 +63,11 @@ private:
   std::string rssFeedListURI;
   RSSIndex index;
   bool built;
+  std::set<url> seenUrls;
+  std::set<Article> seenArticles;
+  std::map<server,
+           std::map<title, std::pair<Article, std::vector<std::string>>>>
+      serverTitleTokenMap;
 
   /**
    * Constructor: NewsAggregator
@@ -72,7 +77,8 @@ private:
    */
   NewsAggregator(const std::string &rssFeedListURI, bool verbose);
 
-  std::set<Article> feedList2Articles(const std::string &rssFeedListURI);
+  void processFeeds(const std::map<std::string, std::string> &feeds);
+  void processArticles(const std::vector<Article> &articles);
 
   /**
    * Method: processAllFeeds

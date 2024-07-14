@@ -6,6 +6,14 @@ set(CMAKE_CXX_COMPILER clang++)
 set(CMAKE_EXPORT_COMPILE_COMMANDS on)
 project(aggregate C CXX)
 
+include(FetchContent)
+FetchContent_Declare(
+  cpr
+  GIT_REPOSITORY https://github.com/libcpr/cpr.git
+  GIT_TAG 1.10.5) # The commit hash for 1.10.x. Replace with the latest from:
+                  # https://github.com/libcpr/cpr/releases
+FetchContent_MakeAvailable(cpr)
+
 include_directories(src lib /usr/local/include /usr/include/libxml2 /usr/lib/)
 
 add_library(
@@ -18,12 +26,6 @@ add_library(
   src/rss-feed-list.cc
   src/html-document.cc
   src/rss-index.cc)
+target_link_libraries(na PRIVATE cpr)
 add_executable(aggregate src/aggregate.cc)
-target_link_libraries(
-  aggregate
-  na
-  pthread
-  m
-  xml2
-  ssl
-  crypto)
+target_link_libraries(aggregate PRIVATE na pthread m xml2 ssl crypto)

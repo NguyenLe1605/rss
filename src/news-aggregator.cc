@@ -163,40 +163,6 @@ NewsAggregator::NewsAggregator(const string &rssFeedListURI, bool verbose)
  */
 
 void NewsAggregator::processAllFeeds() {
-  auto articles = feedList2Articles(rssFeedListURI);
-  map<pair<title, server>, map<Article, vector<string>>> tokenMap;
-  for (auto &article : articles) {
-    log.noteSingleArticleDownloadBeginning(article);
-    auto htmlDoc = HTMLDocument(article.url);
-    try {
-      htmlDoc.parse();
-    } catch (HTMLDocumentException ex) {
-      cerr << ex.what();
-      log.noteSingleArticleDownloadFailure(article);
-    }
-    tokenMap[make_pair(article.title, getURLServer(article.url))][article] =
-        htmlDoc.getTokens();
-  }
-  for (auto &[key, value] : tokenMap) {
-    auto it = value.begin();
-    auto &art = it->first;
-    auto &words = it->second;
-    sort(words.begin(), words.end());
-    it++;
-    for (; it != value.end(); ++it) {
-      vector<string> tmp;
-      auto &vec = it->second;
-      sort(vec.begin(), vec.end());
-      set_intersection(words.cbegin(), words.cend(), tmp.cbegin(), tmp.cend(),
-                       back_inserter(tmp));
-      words = tmp;
-    }
-    index.add(art, words);
-  }
-}
-
-set<Article> NewsAggregator::feedList2Articles(const string &rssFeedListUri) {
-  set<Article> articles;
   RSSFeedList rssFeedList(rssFeedListURI);
   try {
     rssFeedList.parse();
@@ -204,24 +170,62 @@ set<Article> NewsAggregator::feedList2Articles(const string &rssFeedListUri) {
     log.noteFullRSSFeedListDownloadFailureAndExit(rssFeedListURI);
   }
   log.noteFullRSSFeedListDownloadEnd();
-  set<url> urlSet;
-  auto &feeds = rssFeedList.getFeeds();
-  transform(feeds.begin(), feeds.end(), inserter(urlSet, urlSet.end()),
-            [](auto item) { return item.first; });
-  // from rss feed list to rss feed
-  for (auto &uri : urlSet) {
-    log.noteSingleFeedDownloadBeginning(uri);
-    RSSFeed rssFeed(uri);
+  processFeeds(rssFeedList.getFeeds());
+}
+
+void NewsAggregator::processFeeds(const map<string, string> &feeds) {
+  for (const auto &[url, title] : feeds) {
+    if (seenUrls.count(url) == 1) {
+      return;
+    }
+    RSSFeed rssFeed(url);
     try {
       rssFeed.parse();
-      auto &downArticles = rssFeed.getArticles();
-      copy(downArticles.begin(), downArticles.end(),
-           inserter(articles, articles.end()));
     } catch (RSSFeedException ex) {
       cerr << ex.what() << endl;
-      log.noteSingleFeedDownloadFailure(uri);
+      log.noteSingleFeedDownloadFailure(url);
+      continue;
     }
-    log.noteSingleFeedDownloadEnd(uri);
+    processArticles(rssFeed.getArticles());
   }
-  return std::move(articles);
+  // add to the index
+  for (const auto &[host, titleMap] : serverTitleTokenMap) {
+    for (const auto &[title, item] : titleMap) {
+      index.add(item.first, item.second);
+    }
+  }
+}
+
+void NewsAggregator::processArticles(const vector<Article> &articles) {
+  for (const auto &article : articles) {
+    if (seenArticles.count(article) == 1) {
+      return;
+    }
+    log.noteSingleArticleDownloadBeginning(article);
+    auto htmlDoc = HTMLDocument(article.url);
+    try {
+      htmlDoc.parse();
+    } catch (HTMLDocumentException ex) {
+      cerr << ex.what();
+      log.noteSingleArticleDownloadFailure(article);
+      continue;
+    }
+    vector<string> tokens = htmlDoc.getTokens();
+    sort(tokens.begin(), tokens.end());
+    vector<string> newTokens;
+    Article newArticle = article;
+    auto host = getURLServer(article.url);
+    bool isDupe = serverTitleTokenMap.count(host) == 1 &&
+                  serverTitleTokenMap[host].count(article.title) == 1;
+    if (isDupe) {
+      const auto &[currArticle, currToken] =
+          serverTitleTokenMap[host][article.title];
+      set_intersection(currToken.cbegin(), currToken.cend(), tokens.cbegin(),
+                       tokens.cend(), back_inserter(newTokens));
+      newArticle = min(newArticle, currArticle);
+    } else {
+      newTokens = std::move(tokens);
+    }
+    serverTitleTokenMap[host][article.title] = {newArticle, newTokens};
+  }
 }
