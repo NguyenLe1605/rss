@@ -12,6 +12,8 @@
 #include "article.h"
 #include "log.h"
 #include "rss-index.h"
+#include "sem.h"
+#include <memory>
 #include <set>
 #include <string>
 
@@ -63,8 +65,17 @@ private:
   std::string rssFeedListURI;
   RSSIndex index;
   bool built;
+
   std::set<url> seenUrls;
+  Semaphore feedSem{5};
+  std::mutex feedLock;
+
   std::set<Article> seenArticles;
+  Semaphore articleSem{18};
+  std::map<server, std::unique_ptr<Semaphore>> serverSem;
+  std::mutex articleLock;
+  std::mutex semLock;
+  std::mutex serverLock;
   std::map<server,
            std::map<title, std::pair<Article, std::vector<std::string>>>>
       serverTitleTokenMap;

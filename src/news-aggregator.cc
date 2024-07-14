@@ -6,12 +6,15 @@
 
 #include "news-aggregator.h"
 #include <algorithm>
+#include <cmath>
 #include <getopt.h>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <libxml/catalog.h>
 #include <libxml/parser.h>
+#include <mutex>
+#include <thread>
 #include <unordered_set>
 // you will almost certainly need to add more system header includes
 
@@ -174,19 +177,35 @@ void NewsAggregator::processAllFeeds() {
 }
 
 void NewsAggregator::processFeeds(const map<string, string> &feeds) {
+  vector<thread> threads;
   for (const auto &[url, title] : feeds) {
-    if (seenUrls.count(url) == 1) {
-      return;
-    }
-    RSSFeed rssFeed(url);
-    try {
-      rssFeed.parse();
-    } catch (RSSFeedException ex) {
-      cerr << ex.what() << endl;
-      log.noteSingleFeedDownloadFailure(url);
-      continue;
-    }
-    processArticles(rssFeed.getArticles());
+    feedSem.wait();
+    threads.emplace_back(thread(
+        [this](const string &url) {
+          feedLock.lock();
+          if (seenUrls.count(url) == 1) {
+            feedLock.unlock();
+            feedSem.signal();
+            return;
+          }
+          seenUrls.insert(url);
+          feedLock.unlock();
+          RSSFeed rssFeed(url);
+          try {
+            rssFeed.parse();
+          } catch (RSSFeedException ex) {
+            cerr << oslock << ex.what() << endl << osunlock;
+            log.noteSingleFeedDownloadFailure(url);
+            feedSem.signal();
+            return;
+          }
+          processArticles(rssFeed.getArticles());
+          feedSem.signal();
+        },
+        ref(url)));
+  }
+  for (auto &t : threads) {
+    t.join();
   }
   // add to the index
   for (const auto &[host, titleMap] : serverTitleTokenMap) {
@@ -197,35 +216,68 @@ void NewsAggregator::processFeeds(const map<string, string> &feeds) {
 }
 
 void NewsAggregator::processArticles(const vector<Article> &articles) {
+  vector<thread> threads;
   for (const auto &article : articles) {
-    if (seenArticles.count(article) == 1) {
-      return;
-    }
-    log.noteSingleArticleDownloadBeginning(article);
-    auto htmlDoc = HTMLDocument(article.url);
-    try {
-      htmlDoc.parse();
-    } catch (HTMLDocumentException ex) {
-      cerr << ex.what();
-      log.noteSingleArticleDownloadFailure(article);
-      continue;
-    }
-    vector<string> tokens = htmlDoc.getTokens();
-    sort(tokens.begin(), tokens.end());
-    vector<string> newTokens;
-    Article newArticle = article;
-    auto host = getURLServer(article.url);
-    bool isDupe = serverTitleTokenMap.count(host) == 1 &&
-                  serverTitleTokenMap[host].count(article.title) == 1;
-    if (isDupe) {
-      const auto &[currArticle, currToken] =
-          serverTitleTokenMap[host][article.title];
-      set_intersection(currToken.cbegin(), currToken.cend(), tokens.cbegin(),
-                       tokens.cend(), back_inserter(newTokens));
-      newArticle = min(newArticle, currArticle);
-    } else {
-      newTokens = std::move(tokens);
-    }
-    serverTitleTokenMap[host][article.title] = {newArticle, newTokens};
+    articleSem.wait();
+    threads.emplace_back(
+        [this](const Article &article) {
+          auto host = getURLServer(article.url);
+
+          articleLock.lock();
+          if (seenArticles.count(article) == 1) {
+            articleLock.unlock();
+            articleSem.signal();
+            return;
+          }
+          seenArticles.insert(article);
+          articleLock.unlock();
+
+          semLock.lock();
+          unique_ptr<Semaphore> &sem = serverSem[host];
+          if (sem == nullptr)
+            sem.reset(new Semaphore{8});
+          semLock.unlock();
+
+          sem->wait();
+          log.noteSingleArticleDownloadBeginning(article);
+          auto htmlDoc = HTMLDocument(article.url);
+          try {
+            htmlDoc.parse();
+          } catch (HTMLDocumentException ex) {
+            cerr << oslock << ex.what() << endl << osunlock;
+            log.noteSingleArticleDownloadFailure(article);
+            sem->signal();
+            articleSem.signal();
+            return;
+          }
+
+          vector<string> tokens = htmlDoc.getTokens();
+          sort(tokens.begin(), tokens.end());
+          vector<string> newTokens;
+          Article newArticle = article;
+
+          serverLock.lock();
+          bool isDupe = serverTitleTokenMap.count(host) == 1 &&
+                        serverTitleTokenMap[host].count(article.title) == 1;
+          if (isDupe) {
+            const auto &[currArticle, currToken] =
+                serverTitleTokenMap[host][article.title];
+            set_intersection(currToken.cbegin(), currToken.cend(),
+                             tokens.cbegin(), tokens.cend(),
+                             back_inserter(newTokens));
+            newArticle = min(newArticle, currArticle);
+          } else {
+            newTokens = std::move(tokens);
+          }
+          serverTitleTokenMap[host][article.title] = {newArticle, newTokens};
+
+          serverLock.unlock();
+          sem->signal();
+          articleSem.signal();
+        },
+        ref(article));
+  }
+  for (auto &t : threads) {
+    t.join();
   }
 }
